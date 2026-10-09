@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>오늘의 원-달러 환율</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card-bg: #ffffff;
+    --border: #e2e4e9;
+    --text-primary: #1a1d29;
+    --text-muted: #6b7280;
+    --accent: #2a78d6;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 420px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px 28px;
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  }
+
+  h1 {
+    margin: 0 0 24px;
+    font-size: 18px;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  .rate {
+    font-size: 48px;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1.2;
+    margin: 0;
+  }
+
+  .rate .unit {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-left: 4px;
+  }
+
+  .base {
+    margin: 8px 0 0;
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  .status {
+    margin-top: 8px;
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+
+  .status.error {
+    color: #d03b3b;
+  }
+
+  .meta {
+    margin-top: 28px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .meta a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .meta a:hover {
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>오늘의 원-달러 환율</h1>
+    <p class="rate" id="rate">-<span class="unit">원</span></p>
+    <p class="base">1 USD 기준</p>
+    <p class="status" id="status">환율 정보를 불러오는 중...</p>
+
+    <div class="meta">
+      <p>
+        출처:
+        <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">ExchangeRate-API</a>
+      </p>
+      <p id="updatedAt">갱신 시각: -</p>
+    </div>
+  </div>
+
+  <script>
+    const RATE_URL = "https://open.er-api.com/v6/latest/USD";
+
+    function formatRate(value) {
+      return value.toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+    }
+
+    function formatTimestamp(date) {
+      return date.toLocaleString("ko-KR", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short",
+      });
+    }
+
+    async function loadRate() {
+      const rateEl = document.getElementById("rate");
+      const statusEl = document.getElementById("status");
+      const updatedAtEl = document.getElementById("updatedAt");
+
+      try {
+        const res = await fetch(RATE_URL);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        if (data.result !== "success" || !data.rates || !data.rates.KRW) {
+          throw new Error("응답 형식이 올바르지 않습니다.");
+        }
+
+        rateEl.innerHTML = `${formatRate(data.rates.KRW)}<span class="unit">원</span>`;
+        statusEl.textContent = "";
+
+        const updatedAt = new Date(data.time_last_update_utc);
+        updatedAtEl.textContent = `갱신 시각: ${formatTimestamp(updatedAt)}`;
+      } catch (err) {
+        statusEl.textContent = "환율 정보를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.";
+        statusEl.classList.add("error");
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", loadRate);
+  </script>
+</body>
+</html>
