@@ -19,16 +19,16 @@ enum Snapshot {
               to: dir.appendingPathComponent("1-claude-live.png"))
         write(page(failed, now: now) { ProviderDetailView(source: .claudeCodeLogs, now: now) },
               to: dir.appendingPathComponent("2-claude-failed.png"))
-        write(page(live, now: now) { ProviderDetailView(source: .codexLogs, now: now) },
+        write(page(live, now: now, tab: .codex) { ProviderDetailView(source: .codexLogs, now: now) },
               to: dir.appendingPathComponent("3-codex.png"))
-        write(page(live, now: now) {
+        write(page(live, now: now, tab: .overview) {
             OverviewTab(now: now, onEdit: { _ in }, onOpen: { _ in })
         }, to: dir.appendingPathComponent("4-overview.png"))
-        write(page(live, now: now) { SettingsTab() }, to: dir.appendingPathComponent("5-settings.png"))
+        write(page(live, now: now, tab: .settings) { SettingsTab() }, to: dir.appendingPathComponent("5-settings.png"))
         exit(0)
     }
 
-    private static func page<V: View>(_ store: Store, now: Date, @ViewBuilder _ content: () -> V) -> some View {
+    private static func page<V: View>(_ store: Store, now: Date, tab: Tab = .claude, @ViewBuilder _ content: () -> V) -> some View {
         VStack(spacing: 14) {
             HStack(spacing: 10) {
                 Image(systemName: "gauge.with.dots.needle.67percent")
@@ -41,7 +41,7 @@ enum Snapshot {
                 Spacer()
             }
             HStack {
-                NeuSegmented(options: Tab.allCases, selection: .constant(Tab.claude)) { $0.label }
+                NeuSegmented(options: Tab.allCases, selection: .constant(tab)) { $0.label }
                     .frame(width: 280)
                 Spacer()
             }
