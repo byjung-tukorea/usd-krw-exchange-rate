@@ -1,15 +1,17 @@
 import Foundation
 
-/// 로컬 CLI 로그에서 읽어 온 사용량
+/// 로컬 기록에서 읽은 사용량 (실시간 연결 실패 시 대체 값)
 struct UsageSnapshot: Sendable {
     var used: Double
     var limit: Double?
     var resetAt: Date?
     var detail: String?
+    var windows: [UsageWindow] = []
+    var recordedAt: Date?
 }
 
-/// Claude Code(~/.claude/projects) 와 Codex CLI(~/.codex/sessions) 의 JSONL 로그를 읽는다.
-/// 외부 서버로 아무것도 보내지 않으며, 파일은 읽기만 한다.
+/// Claude Code(~/.claude/projects), Codex CLI(~/.codex/sessions), Gemini CLI(~/.gemini/tmp) 기록을 읽는다.
+/// 파일은 읽기만 하며 외부로 아무것도 보내지 않는다.
 enum LocalUsageReader {
 
     private static let iso: ISO8601DateFormatter = {
@@ -27,15 +29,14 @@ enum LocalUsageReader {
         iso.date(from: s) ?? isoNoFraction.date(from: s)
     }
 
-    /// 주어진 폴더 아래에서 `since` 이후 수정된 .jsonl 파일 목록
-    static func jsonlFiles(under roots: [URL], modifiedSince since: Date) -> [URL] {
+    static func files(under roots: [URL], ext: String, modifiedSince since: Date) -> [URL] {
         let fm = FileManager.default
         var result: [URL] = []
         for root in roots where fm.fileExists(atPath: root.path) {
             guard let e = fm.enumerator(at: root,
                                         includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
                                         options: [.skipsHiddenFiles]) else { continue }
-            for case let url as URL in e where url.pathExtension == "jsonl" {
+            for case let url as URL in e where url.pathExtension == ext {
                 let v = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
                 guard v?.isRegularFile == true else { continue }
                 if let m = v?.contentModificationDate, m < since { continue }
@@ -56,121 +57,161 @@ enum LocalUsageReader {
 
     private static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
 
+    private static func num(_ any: Any?) -> Double { (any as? NSNumber)?.doubleValue ?? 0 }
+
     // MARK: - Claude Code
 
-    struct ClaudeEntry { let time: Date; let tokens: Double }
+    struct Entry { let time: Date; let tokens: Double }
 
-    static func claudeEntries(since: Date) -> [ClaudeEntry] {
+    static func claudeEntries(since: Date) -> [Entry] {
         var roots = [home.appendingPathComponent(".claude/projects"),
                      home.appendingPathComponent(".config/claude/projects")]
         if let custom = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] {
             roots.append(URL(fileURLWithPath: custom).appendingPathComponent("projects"))
         }
         var seen = Set<String>()
-        var entries: [ClaudeEntry] = []
-        for file in jsonlFiles(under: roots, modifiedSince: since) {
+        var entries: [Entry] = []
+        for file in files(under: roots, ext: "jsonl", modifiedSince: since) {
             forEachJSONLine(in: file) { obj in
                 guard let ts = obj["timestamp"] as? String, let t = parseDate(ts), t >= since,
                       let msg = obj["message"] as? [String: Any],
                       let usage = msg["usage"] as? [String: Any] else { return }
-                // 같은 응답이 여러 줄로 기록될 수 있어 message.id + requestId 로 중복 제거
                 let key = "\(msg["id"] as? String ?? UUID().uuidString)|\(obj["requestId"] as? String ?? "")"
                 guard seen.insert(key).inserted else { return }
-                func n(_ k: String) -> Double { (usage[k] as? NSNumber)?.doubleValue ?? 0 }
-                let tokens = n("input_tokens") + n("output_tokens") + n("cache_creation_input_tokens")
-                entries.append(ClaudeEntry(time: t, tokens: tokens))
+                let tokens = num(usage["input_tokens"]) + num(usage["output_tokens"])
+                    + num(usage["cache_creation_input_tokens"])
+                entries.append(Entry(time: t, tokens: tokens))
             }
         }
         return entries.sorted { $0.time < $1.time }
     }
 
-    /// Claude 의 5시간 세션 블록 규칙(첫 메시지 시각의 정시부터 5시간)을 흉내 내 현재 블록 사용량을 계산
-    static func claudeUsage(cycle: ResetCycle, now: Date = Date()) -> UsageSnapshot {
-        switch cycle {
-        case .fiveHours:
-            let entries = claudeEntries(since: now.addingTimeInterval(-10 * 3600))
-            var blockStart: Date?
-            var blockTokens = 0.0
-            var blockCount = 0
-            for e in entries {
-                if let s = blockStart, e.time < s.addingTimeInterval(5 * 3600) {
-                    blockTokens += e.tokens
-                    blockCount += 1
-                } else {
-                    blockStart = floorHour(e.time)
-                    blockTokens = e.tokens
-                    blockCount = 1
-                }
+    /// 실시간 연결 실패 시: 로그로 현재 5시간 블록 토큰을 추정
+    static func claudeUsage(now: Date = Date()) -> UsageSnapshot {
+        let entries = claudeEntries(since: now.addingTimeInterval(-10 * 3600))
+        var start: Date?
+        var tokens = 0.0
+        var count = 0
+        for e in entries {
+            if let s = start, e.time < s.addingTimeInterval(5 * 3600) {
+                tokens += e.tokens; count += 1
+            } else {
+                start = floorHour(e.time); tokens = e.tokens; count = 1
             }
-            guard let s = blockStart, now < s.addingTimeInterval(5 * 3600) else {
-                return UsageSnapshot(used: 0, resetAt: nil, detail: "활성 세션 없음")
-            }
-            return UsageSnapshot(used: blockTokens, resetAt: s.addingTimeInterval(5 * 3600),
-                                 detail: "현재 블록 \(blockCount)회 응답")
-        default:
-            let interval: TimeInterval
-            switch cycle {
-            case .daily: interval = 86_400
-            case .weekly: interval = 7 * 86_400
-            default: interval = 30 * 86_400
-            }
-            let entries = claudeEntries(since: now.addingTimeInterval(-interval))
-            let total = entries.reduce(0) { $0 + $1.tokens }
-            return UsageSnapshot(used: total, resetAt: nil, detail: "최근 \(Int(interval / 86_400))일 \(entries.count)회 응답")
         }
+        guard let s = start, now < s.addingTimeInterval(5 * 3600) else {
+            return UsageSnapshot(used: 0, detail: "로그상 활성 세션 없음", recordedAt: entries.last?.time)
+        }
+        return UsageSnapshot(used: tokens, resetAt: s.addingTimeInterval(5 * 3600),
+                             detail: "로그상 현재 블록 \(Fmt.compact(tokens)) 토큰 · \(count)회 응답",
+                             recordedAt: entries.last?.time)
+    }
+
+    static func claudeDaily(days: Int, now: Date = Date()) -> [Date: Double] {
+        let since = Calendar.current.date(byAdding: .day, value: -days, to: now) ?? now
+        var out: [Date: Double] = [:]
+        let cal = Calendar.current
+        for e in claudeEntries(since: since) {
+            out[cal.startOfDay(for: e.time), default: 0] += e.tokens
+        }
+        return out
     }
 
     private static func floorHour(_ d: Date) -> Date {
         let cal = Calendar.current
-        let c = cal.dateComponents([.year, .month, .day, .hour], from: d)
-        return cal.date(from: c) ?? d
+        return cal.date(from: cal.dateComponents([.year, .month, .day, .hour], from: d)) ?? d
     }
 
     // MARK: - Codex CLI
 
-    /// Codex 로그의 token_count 이벤트에 포함된 rate_limits(primary=5시간, secondary=주간) 를 읽는다.
-    static func codexUsage(now: Date = Date()) -> UsageSnapshot? {
+    private static var codexRoots: [URL] {
         var roots = [home.appendingPathComponent(".codex/sessions")]
         if let custom = ProcessInfo.processInfo.environment["CODEX_HOME"] {
             roots.append(URL(fileURLWithPath: custom).appendingPathComponent("sessions"))
         }
-        let files = jsonlFiles(under: roots, modifiedSince: now.addingTimeInterval(-8 * 86_400))
-        var latestTime = Date.distantPast
-        var latestLimits: [String: Any]?
+        return roots
+    }
 
-        for file in files {
+    /// 로그의 마지막 token_count 이벤트에 담긴 rate_limits (primary=5시간, secondary=주간)
+    static func codexUsage(now: Date = Date()) -> UsageSnapshot? {
+        let found = files(under: codexRoots, ext: "jsonl", modifiedSince: now.addingTimeInterval(-8 * 86_400))
+        var latest = Date.distantPast
+        var limits: [String: Any]?
+        for file in found {
             forEachJSONLine(in: file) { obj in
                 guard let payload = obj["payload"] as? [String: Any],
                       payload["type"] as? String == "token_count",
-                      let limits = payload["rate_limits"] as? [String: Any],
-                      let ts = obj["timestamp"] as? String, let t = parseDate(ts),
-                      t > latestTime else { return }
-                latestTime = t
-                latestLimits = limits
+                      let rl = payload["rate_limits"] as? [String: Any],
+                      let ts = obj["timestamp"] as? String, let t = parseDate(ts), t > latest else { return }
+                latest = t
+                limits = rl
             }
         }
-        guard let limits = latestLimits else { return nil }
+        guard let limits else { return nil }
 
-        func window(_ key: String) -> (pct: Double, reset: Date?)? {
+        func window(_ key: String, _ title: String, weekly: Bool) -> UsageWindow? {
             guard let w = limits[key] as? [String: Any] else { return nil }
-            let pct = (w["used_percent"] as? NSNumber)?.doubleValue ?? 0
+            var pct = num(w["used_percent"])
             var reset: Date?
             if let at = (w["resets_at"] as? NSNumber)?.doubleValue {
                 reset = Date(timeIntervalSince1970: at)
             } else if let s = (w["resets_in_seconds"] as? NSNumber)?.doubleValue {
-                reset = latestTime.addingTimeInterval(s)
+                reset = latest.addingTimeInterval(s)
             }
-            // 리셋 시각이 지났으면 0% 로 본다
-            if let r = reset, r <= now { return (0, nil) }
-            return (pct, reset)
+            if let r = reset, r <= now { pct = 0; reset = nil }   // 이미 리셋됨
+            return UsageWindow(id: key, title: title, percent: pct, resetsAt: reset, isWeekly: weekly)
         }
+        let windows = [window("primary", "5시간 세션", weekly: false),
+                       window("secondary", "주간 한도", weekly: true)].compactMap { $0 }
+        return UsageSnapshot(used: windows.first?.percent ?? 0, limit: 100,
+                             resetAt: windows.first?.resetsAt,
+                             detail: "마지막 Codex 기록 \(Fmt.relative(latest)) 기준",
+                             windows: windows, recordedAt: latest)
+    }
 
-        let primary = window("primary")
-        let secondary = window("secondary")
-        var detail: String?
-        if let s = secondary {
-            detail = "주간 \(Int(s.pct.rounded()))% 사용"
+    static func codexDaily(days: Int, now: Date = Date()) -> [Date: Double] {
+        let since = Calendar.current.date(byAdding: .day, value: -days, to: now) ?? now
+        let cal = Calendar.current
+        var out: [Date: Double] = [:]
+        for file in files(under: codexRoots, ext: "jsonl", modifiedSince: since) {
+            forEachJSONLine(in: file) { obj in
+                guard let payload = obj["payload"] as? [String: Any],
+                      payload["type"] as? String == "token_count",
+                      let info = payload["info"] as? [String: Any],
+                      let last = info["last_token_usage"] as? [String: Any],
+                      let ts = obj["timestamp"] as? String, let t = parseDate(ts), t >= since else { return }
+                let total = num(last["total_tokens"]) > 0
+                    ? num(last["total_tokens"])
+                    : num(last["input_tokens"]) + num(last["output_tokens"])
+                out[cal.startOfDay(for: t), default: 0] += total
+            }
         }
-        return UsageSnapshot(used: primary?.pct ?? 0, limit: 100, resetAt: primary?.reset, detail: detail)
+        return out
+    }
+
+    // MARK: - Gemini CLI
+
+    /// ~/.gemini/tmp/<프로젝트>/logs.json 의 사용자 프롬프트 수 (오늘)
+    static func geminiUsage(now: Date = Date()) -> UsageSnapshot? {
+        let root = home.appendingPathComponent(".gemini/tmp")
+        let start = Calendar.current.startOfDay(for: now)
+        let logFiles = files(under: [root], ext: "json", modifiedSince: start)
+            .filter { $0.lastPathComponent == "logs.json" }
+        let anyLogs = !files(under: [root], ext: "json", modifiedSince: .distantPast)
+            .filter { $0.lastPathComponent == "logs.json" }.isEmpty
+        guard anyLogs else { return nil }
+        var count = 0
+        var latest: Date?
+        for f in logFiles {
+            guard let d = try? Data(contentsOf: f),
+                  let arr = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] else { continue }
+            for item in arr where (item["type"] as? String ?? "user") == "user" {
+                guard let ts = item["timestamp"] as? String, let t = parseDate(ts), t >= start else { continue }
+                count += 1
+                if latest == nil || t > latest! { latest = t }
+            }
+        }
+        return UsageSnapshot(used: Double(count), resetAt: Calendar.current.date(byAdding: .day, value: 1, to: start),
+                             detail: "Gemini CLI 오늘 프롬프트 \(count)회 (웹 사용 제외)", recordedAt: latest)
     }
 }

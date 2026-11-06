@@ -16,7 +16,7 @@ enum LimitUnit: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// 한도가 초기화되는 주기
+/// 한도가 초기화되는 주기 (수동 입력용)
 enum ResetCycle: String, Codable, CaseIterable, Identifiable {
     case fiveHours, daily, weekly, monthly, none
     var id: String { rawValue }
@@ -35,7 +35,7 @@ enum ResetCycle: String, Codable, CaseIterable, Identifiable {
         let cal = Calendar.current
         switch self {
         case .fiveHours: return date.addingTimeInterval(5 * 3600)
-        case .daily: return cal.date(byAdding: .day, value: 1, to: date)
+        case .daily: return cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: date))
         case .weekly: return cal.date(byAdding: .day, value: 7, to: date)
         case .monthly: return cal.date(byAdding: .month, value: 1, to: date)
         case .none: return nil
@@ -43,18 +43,30 @@ enum ResetCycle: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// 사용량을 어디서 가져올지
+/// 사용량을 어디서 가져올지 (rawValue 는 예전 저장 데이터와 호환)
 enum UsageSource: String, Codable, CaseIterable, Identifiable {
-    case manual, claudeCodeLogs, codexLogs
+    case claudeCodeLogs   // Claude 계정 (실시간 API → 실패 시 로그)
+    case codexLogs        // ChatGPT/Codex 계정 (실시간 API → 실패 시 로그)
+    case geminiCLI        // Gemini CLI 로컬 기록 (추정)
+    case manual
     var id: String { rawValue }
 
     var label: String {
         switch self {
+        case .claudeCodeLogs: return "Claude 계정 (실시간)"
+        case .codexLogs: return "ChatGPT·Codex 계정 (실시간)"
+        case .geminiCLI: return "Gemini CLI 기록 (추정)"
         case .manual: return "직접 입력"
-        case .claudeCodeLogs: return "Claude Code 로그"
-        case .codexLogs: return "Codex CLI 로그"
         }
     }
+
+    var isLive: Bool { self == .claudeCodeLogs || self == .codexLogs }
+}
+
+enum Currency: String, Codable, CaseIterable, Identifiable {
+    case usd = "USD", krw = "KRW"
+    var id: String { rawValue }
+    var symbol: String { self == .usd ? "$" : "₩" }
 }
 
 /// 구글 SSO 로그인 계정 (서비스마다 다름)
@@ -63,7 +75,6 @@ enum Account: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String { self == .school ? "학교" : "개인" }
     var symbol: String { self == .school ? "graduationcap" : "person" }
-    /// 설정에 입력한 이메일 (없으면 빈 문자열)
     var email: String {
         UserDefaults.standard.string(forKey: self == .school ? "schoolEmail" : "personalEmail") ?? ""
     }
@@ -88,20 +99,23 @@ enum AccountFilter: String, CaseIterable, Identifiable {
     }
 }
 
-enum Currency: String, Codable, CaseIterable, Identifiable {
-    case usd = "USD", krw = "KRW"
-    var id: String { rawValue }
-    var symbol: String { self == .usd ? "$" : "₩" }
+/// 서비스가 알려 준 사용 창 하나 (예: 5시간, 주간 전체, 주간 Opus)
+struct UsageWindow: Codable, Equatable, Identifiable, Sendable {
+    var id: String          // five_hour, seven_day ...
+    var title: String       // "5시간", "주간 · 전체 모델"
+    var percent: Double     // 0...100
+    var resetsAt: Date?
+    var isWeekly: Bool = false
 }
 
 struct Subscription: Identifiable, Codable, Equatable {
     var id = UUID()
     var name: String
     var plan: String
-    var symbol: String                 // SF Symbol 이름
+    var symbol: String
     var price: Double
     var currency: Currency
-    var renewalDate: Date              // 다음 결제일
+    var renewalDate: Date
     var autoRenew: Bool = true
     var limitUnit: LimitUnit
     var used: Double
@@ -112,28 +126,41 @@ struct Subscription: Identifiable, Codable, Equatable {
     var isActive: Bool = true
     var notes: String = ""
 
-    // 로컬 로그 동기화 결과 (선택 값이라 예전 데이터와도 호환)
+    // 이하 선택 값 (예전 데이터 호환)
     var syncedResetAt: Date?
     var syncedDetail: String?
-
-    // 로그인한 구글 계정 (예전 데이터에는 없을 수 있어 선택 값)
     var account: Account?
+    var windows: [UsageWindow]?        // 실시간/로그로 받은 사용 창
+    var liveState: LiveState?
+    var liveMessage: String?           // "Claude 계정 연결됨", 실패 사유 등
+    var liveAt: Date?                  // 마지막으로 값을 받은 시각
+    var detectedPlan: String?          // 서비스가 알려 준 플랜
+    var renewalConfirmed: Bool?        // 사용자가 결제일을 직접 확인했는지
+
     var acct: Account {
         get { account ?? .personal }
         set { account = newValue }
     }
 
-    // MARK: 계산 값
+    var state: LiveState { source == .manual ? .manual : (liveState ?? .failed) }
 
+    var hasRenewal: Bool { renewalConfirmed ?? false }
+
+    /// 대표 사용률 (0...1). 실시간 서비스는 5시간 창, 수동은 used/limit
     var ratio: Double {
+        if let w = windows?.first { return min(max(w.percent / 100, 0), 1) }
         guard limit > 0 else { return 0 }
         return min(max(used / limit, 0), 1)
     }
 
     var remaining: Double { max(limit - used, 0) }
 
+    var primaryWindow: UsageWindow? { windows?.first { !$0.isWeekly } }
+    var weeklyWindow: UsageWindow? { windows?.first { $0.isWeekly } }
+
     var nextReset: Date? {
-        if source != .manual, let s = syncedResetAt { return s }
+        if let r = primaryWindow?.resetsAt { return r }
+        if source != .manual { return syncedResetAt }
         return resetCycle.next(after: lastReset)
     }
 
@@ -148,21 +175,21 @@ struct Subscription: Identifiable, Codable, Equatable {
         currency == .krw ? price : price * usdKrw
     }
 
-    /// 지난 주기를 정리: 결제일 자동 연장, 수동 사용량 초기화
+    /// 지난 주기 정리: 결제일 자동 연장, 수동 사용량 초기화
     mutating func rollOver(now: Date = Date()) {
         if autoRenew {
-            var guardCount = 0
-            while renewalDate < Calendar.current.startOfDay(for: now), guardCount < 120 {
+            var n = 0
+            while renewalDate < Calendar.current.startOfDay(for: now), n < 120 {
                 renewalDate = Calendar.current.date(byAdding: .month, value: 1, to: renewalDate) ?? now
-                guardCount += 1
+                n += 1
             }
         }
         guard source == .manual else { return }
-        var guardCount = 0
-        while let n = resetCycle.next(after: lastReset), n <= now, guardCount < 10_000 {
-            lastReset = n
+        var n = 0
+        while let next = resetCycle.next(after: lastReset), next <= now, n < 10_000 {
+            lastReset = next
             used = 0
-            guardCount += 1
+            n += 1
         }
     }
 }
@@ -172,30 +199,32 @@ extension Subscription {
         Calendar.current.date(byAdding: .day, value: d, to: Date()) ?? Date()
     }
 
+    /// 처음 실행 시 목록. 사용량은 0, 결제일은 '미설정' 상태로 시작한다.
     static var defaults: [Subscription] {
         let now = Date()
+        let soon = days(30)
         return [
-            Subscription(name: "Claude Code", plan: "Max 5x", symbol: "sparkle",
-                         price: 100, currency: .usd, renewalDate: days(18),
-                         limitUnit: .tokens, used: 0, limit: 2_000_000,
-                         resetCycle: .fiveHours, lastReset: now, source: .claudeCodeLogs,
-                         notes: "토큰은 입력+출력+캐시 생성 기준. 한도는 체감에 맞게 조정하세요."),
-            Subscription(name: "ChatGPT Codex", plan: "Plus", symbol: "terminal",
-                         price: 20, currency: .usd, renewalDate: days(9),
+            Subscription(name: "Claude", plan: "Max", symbol: "sparkle",
+                         price: 100, currency: .usd, renewalDate: soon,
                          limitUnit: .percent, used: 0, limit: 100,
-                         resetCycle: .fiveHours, lastReset: now, source: .codexLogs),
+                         resetCycle: .fiveHours, lastReset: now, source: .claudeCodeLogs, renewalConfirmed: false),
+            Subscription(name: "ChatGPT Codex", plan: "Plus", symbol: "terminal",
+                         price: 20, currency: .usd, renewalDate: soon,
+                         limitUnit: .percent, used: 0, limit: 100,
+                         resetCycle: .fiveHours, lastReset: now, source: .codexLogs, renewalConfirmed: false),
             Subscription(name: "Lovable", plan: "Pro", symbol: "heart",
-                         price: 25, currency: .usd, renewalDate: days(4),
-                         limitUnit: .credits, used: 32, limit: 100,
-                         resetCycle: .monthly, lastReset: Calendar.current.date(byAdding: .day, value: -26, to: now) ?? now),
+                         price: 25, currency: .usd, renewalDate: soon,
+                         limitUnit: .credits, used: 0, limit: 100,
+                         resetCycle: .monthly, lastReset: now, renewalConfirmed: false),
             Subscription(name: "Genspark", plan: "Plus", symbol: "bolt",
-                         price: 24.99, currency: .usd, renewalDate: days(22),
-                         limitUnit: .credits, used: 2_400, limit: 10_000,
-                         resetCycle: .monthly, lastReset: Calendar.current.date(byAdding: .day, value: -8, to: now) ?? now),
+                         price: 24.99, currency: .usd, renewalDate: soon,
+                         limitUnit: .credits, used: 0, limit: 10_000,
+                         resetCycle: .monthly, lastReset: now, renewalConfirmed: false),
             Subscription(name: "Gemini", plan: "Google AI Pro", symbol: "diamond",
-                         price: 29_000, currency: .krw, renewalDate: days(13),
-                         limitUnit: .requests, used: 12, limit: 100,
-                         resetCycle: .daily, lastReset: Calendar.current.startOfDay(for: now)),
+                         price: 29_000, currency: .krw, renewalDate: soon,
+                         limitUnit: .requests, used: 0, limit: 1_500,
+                         resetCycle: .daily, lastReset: Calendar.current.startOfDay(for: now),
+                         source: .geminiCLI, renewalConfirmed: false),
         ]
     }
 }

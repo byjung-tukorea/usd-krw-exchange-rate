@@ -1,41 +1,34 @@
-# SubDash — AI 구독 대시보드 (macOS)
+# SubDash — AI 구독 사용량 대시보드 (macOS)
 
-Claude Code Max, ChatGPT Plus(Codex), Lovable, Genspark, Gemini 등 AI 구독의
-**토큰/한도 사용량, 리셋까지 남은 시간, 다음 결제일(D-day), 월 합계**를 작은 창 하나에서 보는 개인용 맥 앱입니다.
+Claude, ChatGPT Codex, Lovable, Genspark, Gemini 구독을 작은 창 하나에서 봅니다.
+검정 바탕 + 코발트 블루 강조, 양각 카드·음각 트랙의 뉴모피즘 UI.
 
-- 360pt 폭의 작은 창, 무채색 뉴모피즘(양각 카드 + 음각 패널/트랙), 라이트·다크 자동 대응
-- 토글: 구독별 켜기/끄기, 항상 위에, 메뉴 막대 아이콘, 자동 동기화, 환율 자동 갱신, 꺼진 항목 표시
-- 세그먼트 전환: **사용량 ↔ 남은 양**
-- 메뉴 막대 패널에서 한눈에 요약
-- **구글 SSO 계정 구분**: 구독마다 `학교` / `개인` 지메일 계정을 지정하고, 상단 `전체 · 학교 · 개인` 필터로 계정별 합계·목록 보기
-  (설정에서 두 계정의 이메일을 적어 두면 카드에 마우스를 올렸을 때 표시)
-- 데이터는 `~/Library/Application Support/SubDash/subscriptions.json` 에만 저장 (외부 전송 없음, 환율 조회만 open.er-api.com)
+## 화면
 
-## 사용량 집계 방식
+- **한눈에**: 5개 서비스 카드 (5시간·주간 사용률, 리셋까지 남은 시간, 결제 D-day, 월 합계, 학교/개인 계정 필터)
+- **Claude**: 5시간 세션, 주간(전체·Opus·Sonnet) 한도, 리셋 시각, 연결 상태, 일별 사용 히트맵
+- **Codex**: 5시간·주간 한도, 연결 상태, 일별 사용 히트맵
+- **설정**: 항상 위에, 메뉴 막대 표시, 자동 새로고침, 구글 계정 이메일, 환율
+- 메뉴 막대에 `C 1%  X 23%` 처럼 Claude/Codex 5시간 사용률 표시
 
-| 서비스 | 방식 |
-| --- | --- |
-| Claude Code (Max) | `~/.claude/projects/**/*.jsonl` 로그를 읽어 **현재 5시간 블록**의 토큰(입력+출력+캐시 생성)과 리셋 시각 자동 계산 |
-| ChatGPT Codex (Plus) | `~/.codex/sessions/**/*.jsonl` 의 `rate_limits` 를 읽어 5시간 한도 % 와 주간 % 자동 표시 |
-| Lovable · Genspark · Gemini 등 | 공개 사용량 API가 없어 **직접 입력** (카드 우클릭 → +1/+10/초기화, 리셋 주기가 지나면 자동 0) |
+## 실제 값 연결
 
-Claude/ChatGPT 구독의 정확한 한도는 공개되지 않으므로, 카드의 `한도` 값은 체감에 맞게 조정하세요.
+| 서비스 | 방법 | 상태 표시 |
+| --- | --- | --- |
+| Claude | Claude Code 로그인 토큰(키체인 `Claude Code-credentials`)으로 `api.anthropic.com/api/oauth/usage` 조회 | 성공 시 코발트 |
+| Codex | `~/.codex/auth.json` 로 `chatgpt.com/backend-api/wham/usage` 조회, 실패 시 Codex 로그의 rate_limits | 로그 기준이면 흐린 청회색 |
+| Gemini | 공개 API 없음 → Gemini CLI 기록(`~/.gemini/tmp`)으로 오늘 프롬프트 수 추정 | 흐린 청회색 |
+| Lovable · Genspark | 공개 API 없음 → 직접 입력 | 회색 |
 
-## 조작
+실시간 값을 못 받으면 막대·아이콘 색이 **회색으로 죽고**, 실패 사유와 마지막 성공 시각이 표시됩니다.
 
-- 카드 **더블클릭** → 편집, **우클릭** → 빠른 메뉴 (로그인 계정 바로 변경 포함)
-- 상단 📌 항상 위에 · ＋ 추가 · ⚙︎ 설정
-- `⌘R` 지금 동기화
+- 처음 Claude 조회 시 macOS 가 `security` 의 키체인 접근을 물으면 **항상 허용**.
+- 토큰 만료 시 터미널에서 `claude` (또는 `codex`) 를 한 번 실행하면 갱신됩니다.
+- 토큰은 해당 서비스 서버로만 전송되고 앱은 따로 저장하지 않습니다. 사용 기록은 `~/Library/Application Support/SubDash/` 에만 저장.
 
-## DMG 받기
+## 설치
 
-GitHub Actions(`.github/workflows/macos-dmg.yml`)가 푸시마다 Universal DMG 를 빌드합니다.
-
-1. 저장소 **Actions → Build SubDash DMG → 최신 실행 → Artifacts** 에서 `SubDash-x.y.z` 다운로드
-2. `v1.0.0` 같은 태그를 푸시하면 **Releases** 에 DMG 가 첨부됩니다.
-
-개인용 ad-hoc 서명이라 처음 실행 시 Gatekeeper 경고가 뜹니다.
-앱을 `응용 프로그램`으로 옮긴 뒤 **우클릭 → 열기**, 또는 터미널에서:
+Actions → Build SubDash DMG → 최신 실행 → Artifacts 에서 DMG 를 받아 응용 프로그램으로 옮긴 뒤:
 
 ```bash
 xattr -cr /Applications/SubDash.app
@@ -45,9 +38,6 @@ xattr -cr /Applications/SubDash.app
 
 ```bash
 cd SubDash
-./scripts/build_dmg.sh          # build/SubDash-1.0.0.dmg
-UNIVERSAL=0 ./scripts/build_dmg.sh   # 현재 아키텍처만 (더 빠름)
-swift run                       # 개발 중 바로 실행
+./scripts/build_dmg.sh        # build/SubDash-1.0.0.dmg
+swift run                     # 개발 중 바로 실행
 ```
-
-요구 사항: macOS 13 이상, Xcode 15+ 또는 Command Line Tools.
