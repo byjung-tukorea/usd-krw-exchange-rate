@@ -31,6 +31,14 @@ struct EditView: View {
                     section("기본") {
                         row("서비스") { NeuField(title: "예: Claude Code", text: $s.name) }
                         row("플랜") { NeuField(title: "예: Max 5x", text: $s.plan) }
+                        row("구글 계정") {
+                            NeuSegmented(options: Account.allCases, selection: $s.acct) { $0.label }
+                        }
+                        if !s.acct.email.isEmpty {
+                            Text(s.acct.email)
+                                .font(.system(size: 10)).foregroundStyle(Theme.inkFaint)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
                         row("아이콘") { symbolPicker }
                     }
 
@@ -190,6 +198,8 @@ struct SettingsView: View {
     @AppStorage("alwaysOnTop") private var alwaysOnTop = false
     @AppStorage("showMenuBar") private var showMenuBar = true
     @AppStorage("appearance") private var appearance = "system"
+    @AppStorage("schoolEmail") private var schoolEmail = ""
+    @AppStorage("personalEmail") private var personalEmail = ""
 
     private var rate: Binding<Double> {
         Binding(get: { store.usdKrw }, set: { store.usdKrw = $0 })
@@ -231,6 +241,24 @@ struct SettingsView: View {
                 if let at = store.rateUpdatedAt {
                     Text("환율 갱신 \(Fmt.date(at)) \(Fmt.time(at)) · open.er-api.com")
                         .font(.system(size: 9)).foregroundStyle(Theme.inkFaint)
+                }
+            }
+            .padding(12)
+            .raised(radius: 14, depth: 4)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("구글 SSO 계정").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.inkFaint)
+                HStack {
+                    Label("학교", systemImage: Account.school.symbol)
+                        .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.ink)
+                        .frame(width: 56, alignment: .leading)
+                    NeuField(title: "학교 지메일", text: $schoolEmail)
+                }
+                HStack {
+                    Label("개인", systemImage: Account.personal.symbol)
+                        .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.ink)
+                        .frame(width: 56, alignment: .leading)
+                    NeuField(title: "개인 지메일", text: $personalEmail)
                 }
             }
             .padding(12)

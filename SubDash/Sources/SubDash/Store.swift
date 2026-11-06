@@ -86,11 +86,19 @@ final class Store: ObservableObject {
 
     var active: [Subscription] { subs.filter(\.isActive) }
 
-    var monthlyTotalKRW: Double { active.reduce(0) { $0 + $1.monthlyCost(usdKrw: usdKrw) } }
+    func activeSubs(_ f: AccountFilter) -> [Subscription] { active.filter { f.matches($0) } }
 
-    var nextRenewal: Subscription? { active.min { $0.renewalDate < $1.renewalDate } }
+    var monthlyTotalKRW: Double { monthlyTotal(.all) }
 
-    var mostUsed: Subscription? { active.filter { $0.limit > 0 }.max { $0.ratio < $1.ratio } }
+    func monthlyTotal(_ f: AccountFilter) -> Double {
+        activeSubs(f).reduce(0) { $0 + $1.monthlyCost(usdKrw: usdKrw) }
+    }
+
+    func nextRenewal(_ f: AccountFilter) -> Subscription? { activeSubs(f).min { $0.renewalDate < $1.renewalDate } }
+
+    func mostUsed(_ f: AccountFilter) -> Subscription? {
+        activeSubs(f).filter { $0.limit > 0 }.max { $0.ratio < $1.ratio }
+    }
 
     // MARK: 동기화
 

@@ -57,6 +57,37 @@ enum UsageSource: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// 구글 SSO 로그인 계정 (서비스마다 다름)
+enum Account: String, Codable, CaseIterable, Identifiable {
+    case school, personal
+    var id: String { rawValue }
+    var label: String { self == .school ? "학교" : "개인" }
+    var symbol: String { self == .school ? "graduationcap" : "person" }
+    /// 설정에 입력한 이메일 (없으면 빈 문자열)
+    var email: String {
+        UserDefaults.standard.string(forKey: self == .school ? "schoolEmail" : "personalEmail") ?? ""
+    }
+}
+
+enum AccountFilter: String, CaseIterable, Identifiable {
+    case all, school, personal
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .all: return "전체"
+        case .school: return "학교"
+        case .personal: return "개인"
+        }
+    }
+    func matches(_ s: Subscription) -> Bool {
+        switch self {
+        case .all: return true
+        case .school: return s.acct == .school
+        case .personal: return s.acct == .personal
+        }
+    }
+}
+
 enum Currency: String, Codable, CaseIterable, Identifiable {
     case usd = "USD", krw = "KRW"
     var id: String { rawValue }
@@ -84,6 +115,13 @@ struct Subscription: Identifiable, Codable, Equatable {
     // 로컬 로그 동기화 결과 (선택 값이라 예전 데이터와도 호환)
     var syncedResetAt: Date?
     var syncedDetail: String?
+
+    // 로그인한 구글 계정 (예전 데이터에는 없을 수 있어 선택 값)
+    var account: Account?
+    var acct: Account {
+        get { account ?? .personal }
+        set { account = newValue }
+    }
 
     // MARK: 계산 값
 

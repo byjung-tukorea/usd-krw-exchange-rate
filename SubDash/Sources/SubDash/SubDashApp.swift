@@ -73,6 +73,9 @@ struct MenuBarPanel: View {
                         HStack {
                             Image(systemName: s.symbol).font(.system(size: 9)).frame(width: 12)
                             Text(s.name).font(.system(size: 11, weight: .medium))
+                            Image(systemName: s.acct.symbol).font(.system(size: 8))
+                                .foregroundStyle(Theme.inkFaint)
+                                .help(s.acct.label + " 계정")
                             Spacer()
                             if s.limit > 0 {
                                 Text("\(Int((s.ratio * 100).rounded()))%")

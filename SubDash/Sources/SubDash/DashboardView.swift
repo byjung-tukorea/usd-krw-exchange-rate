@@ -5,6 +5,7 @@ struct DashboardView: View {
     @AppStorage("displayMode") private var displayModeRaw = DisplayMode.used.rawValue
     @AppStorage("alwaysOnTop") private var alwaysOnTop = false
     @AppStorage("showInactive") private var showInactive = true
+    @AppStorage("accountFilter") private var accountFilterRaw = AccountFilter.all.rawValue
 
     @State private var editing: Subscription?
     @State private var showSettings = false
@@ -14,16 +15,25 @@ struct DashboardView: View {
                 set: { displayModeRaw = $0.rawValue })
     }
 
+    private var accountFilter: Binding<AccountFilter> {
+        Binding(get: { AccountFilter(rawValue: accountFilterRaw) ?? .all },
+                set: { accountFilterRaw = $0.rawValue })
+    }
+
     private var visible: [Subscription] {
-        showInactive ? store.subs : store.subs.filter(\.isActive)
+        store.subs.filter { (showInactive || $0.isActive) && accountFilter.wrappedValue.matches($0) }
     }
 
     var body: some View {
         VStack(spacing: 14) {
             header
-            SummaryPanel()
-            NeuSegmented(options: DisplayMode.allCases, selection: displayMode) { $0.label }
-                .padding(.horizontal, 2)
+            SummaryPanel(filter: accountFilter.wrappedValue)
+            HStack(spacing: 10) {
+                NeuSegmented(options: AccountFilter.allCases, selection: accountFilter) { $0.label }
+                NeuSegmented(options: DisplayMode.allCases, selection: displayMode) { $0.label }
+                    .frame(width: 128)
+            }
+            .padding(.horizontal, 2)
 
             ScrollView(.vertical, showsIndicators: false) {
                 TimelineView(.periodic(from: .now, by: 30)) { ctx in
@@ -123,19 +133,21 @@ struct DashboardView: View {
 
 struct SummaryPanel: View {
     @EnvironmentObject var store: Store
+    var filter: AccountFilter = .all
 
     var body: some View {
         HStack(spacing: 0) {
-            stat(title: "월 합계", value: Fmt.won(store.monthlyTotalKRW),
-                 sub: "\(store.active.count)개 구독")
+            stat(title: filter == .all ? "월 합계" : "월 합계 · \(filter.label)",
+                 value: Fmt.won(store.monthlyTotal(filter)),
+                 sub: "\(store.activeSubs(filter).count)개 구독")
             divider
-            if let n = store.nextRenewal {
+            if let n = store.nextRenewal(filter) {
                 stat(title: "다음 결제", value: Fmt.dday(n.daysUntilRenewal), sub: n.name)
             } else {
                 stat(title: "다음 결제", value: "–", sub: " ")
             }
             divider
-            if let m = store.mostUsed {
+            if let m = store.mostUsed(filter) {
                 stat(title: "최다 사용", value: "\(Int((m.ratio * 100).rounded()))%", sub: m.name)
             } else {
                 stat(title: "최다 사용", value: "–", sub: " ")
@@ -192,10 +204,13 @@ struct SubscriptionCard: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.ink)
                         .lineLimit(1)
-                    Text("\(sub.plan) · \(Fmt.price(sub))/월")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Theme.inkSoft)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        accountChip
+                        Text("\(sub.plan) · \(Fmt.price(sub))/월")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.inkSoft)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 4)
                 ddayBadge
@@ -215,6 +230,13 @@ struct SubscriptionCard: View {
         .onTapGesture(count: 2, perform: onEdit)
         .contextMenu {
             Button("편집…", action: onEdit)
+            Menu("로그인 계정") {
+                ForEach(Account.allCases) { a in
+                    Button((sub.acct == a ? "✓ " : "") + a.label + (a.email.isEmpty ? "" : " (\(a.email))")) {
+                        var s = sub; s.acct = a; store.upsert(s)
+                    }
+                }
+            }
             if sub.source == .manual {
                 Button("사용량 +1") { store.adjust(sub, by: 1) }
                 Button("사용량 +10") { store.adjust(sub, by: 10) }
@@ -223,6 +245,18 @@ struct SubscriptionCard: View {
             Divider()
             Button("삭제", role: .destructive) { store.delete(sub) }
         }
+    }
+
+    private var accountChip: some View {
+        let a = sub.acct
+        return HStack(spacing: 2) {
+            Image(systemName: a.symbol).font(.system(size: 7, weight: .bold))
+            Text(a.label).font(.system(size: 9, weight: .semibold))
+        }
+        .foregroundStyle(Theme.inkSoft)
+        .padding(.horizontal, 5).padding(.vertical, 1.5)
+        .background(InsetBackground(shape: Capsule(), depth: 1.5))
+        .help(a.email.isEmpty ? "\(a.label) 구글 계정" : a.email)
     }
 
     private var ddayBadge: some View {
