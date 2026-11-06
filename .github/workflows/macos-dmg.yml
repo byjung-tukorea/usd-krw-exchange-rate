@@ -52,6 +52,18 @@ jobs:
           name: screenshots-${{ env.VERSION }}
           path: SubDash/build/shots/*.png
 
+      # 화면 점검용: 캡처 이미지를 ci-screenshots 브랜치에 덮어쓴다 (GITHUB_TOKEN 푸시는 워크플로를 다시 실행하지 않음)
+      - name: Publish screenshots branch
+        if: always() && !startsWith(github.ref, 'refs/tags/')
+        working-directory: SubDash/build/shots
+        run: |
+          git init -q
+          git checkout -q -b ci-screenshots
+          git add *.png
+          git -c user.name="github-actions" -c user.email="github-actions@users.noreply.github.com" \
+            commit -qm "screenshots for ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-screenshots
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
