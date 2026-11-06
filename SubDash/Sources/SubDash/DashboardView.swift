@@ -29,9 +29,13 @@ struct DashboardView: View {
     var body: some View {
         VStack(spacing: 14) {
             header
-            NeuSegmented(options: Tab.allCases, selection: tab) { $0.label }
+            HStack {
+                NeuSegmented(options: Tab.allCases, selection: tab) { $0.label }
+                    .frame(width: 280)
+                Spacer()
+            }
 
-            ScrollView(.vertical, showsIndicators: false) {
+            ScrollView(.vertical, showsIndicators: true) {
                 TimelineView(.periodic(from: .now, by: 30)) { ctx in
                     Group {
                         switch tab.wrappedValue {
@@ -54,8 +58,8 @@ struct DashboardView: View {
         .padding(.horizontal, 16)
         .padding(.top, 30)       // 숨긴 타이틀바(신호등 버튼) 공간
         .padding(.bottom, 12)
-        .frame(width: 380)
-        .frame(minHeight: 560, idealHeight: 700)
+        .frame(width: 440)
+        .frame(minHeight: 600, idealHeight: 720)
         .background(Theme.bg.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .sheet(item: $editing) { sub in

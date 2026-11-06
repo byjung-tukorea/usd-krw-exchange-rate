@@ -107,10 +107,10 @@ enum ClaudeAPI {
 
         let spec: [(String, String, Bool)] = [
             ("five_hour", "5시간 세션", false),
-            ("seven_day", "주간 · 전체 모델", true),
-            ("seven_day_opus", "주간 · Opus", true),
-            ("seven_day_sonnet", "주간 · Sonnet", true),
-            ("seven_day_oauth_apps", "주간 · 연결 앱", true),
+            ("seven_day", "전체 모델", true),
+            ("seven_day_opus", "Opus", true),
+            ("seven_day_sonnet", "Sonnet", true),
+            ("seven_day_oauth_apps", "연결 앱", true),
         ]
         var windows: [UsageWindow] = []
         for (key, title, weekly) in spec {
@@ -164,7 +164,7 @@ enum CodexAPI {
             return UsageWindow(id: key, title: title, percent: pct, resetsAt: reset, isWeekly: weekly)
         }
         let windows = [window("primary_window", "5시간 세션", weekly: false),
-                       window("secondary_window", "주간 한도", weekly: true)].compactMap { $0 }
+                       window("secondary_window", "전체", weekly: true)].compactMap { $0 }
         guard !windows.isEmpty else { throw ProviderError.unreadable }
         let plan = (json["plan_type"] as? String).map { $0.capitalized }
         return LiveResult(windows: windows, plan: plan, message: "ChatGPT 계정 연결됨")

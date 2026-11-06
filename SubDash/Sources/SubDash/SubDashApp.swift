@@ -15,7 +15,7 @@ struct SubDashApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
-        .defaultSize(width: 380, height: 700)
+        .defaultSize(width: 440, height: 720)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("구독") {
@@ -36,6 +36,7 @@ struct SubDashApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
+        Snapshot.runIfRequested()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -29,10 +29,28 @@ jobs:
       - name: Build DMG
         run: ./scripts/build_dmg.sh
 
+      - name: Render screenshots
+        run: |
+          mkdir -p build/shots
+          ./build/SubDash.app/Contents/MacOS/SubDash --snapshot "$PWD/build/shots" &
+          pid=$!
+          for i in $(seq 1 60); do
+            [ -f build/shots/5-settings.png ] && break
+            sleep 1
+          done
+          sleep 1; kill $pid 2>/dev/null || true
+          ls -la build/shots
+
       - uses: actions/upload-artifact@v4
         with:
           name: SubDash-${{ env.VERSION }}
           path: SubDash/build/*.dmg
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ env.VERSION }}
+          path: SubDash/build/shots/*.png
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')

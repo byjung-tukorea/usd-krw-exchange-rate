@@ -20,6 +20,9 @@ final class Store: ObservableObject {
     /// 일별 사용량 (히트맵). 값은 0...1 강도
     @Published var daily: [ProviderKey: [Date: Double]] = [:]
     @Published var dailyIsPeak: [ProviderKey: Set<Date>] = [:]
+    @Published var dailyCalibrated: [ProviderKey: Bool] = [:]
+    /// 사용자가 '연결 해제' 한 서비스 (토큰을 읽지 않음)
+    @Published var disconnected: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "disconnected") ?? [])
     private var dailyComputedAt: Date?
 
     /// 앱이 기록한 날짜별 최대 5시간 사용률 (%)
@@ -41,7 +44,12 @@ final class Store: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "usdKrw"); objectWillChange.send() }
     }
 
-    init() {
+    /// 화면 점검용 스냅샷 모드 (디스크·네트워크 사용 안 함)
+    let demo: Bool
+
+    init(demo: Bool = false) {
+        self.demo = demo
+        if demo { return }
         load()
         migrate()
         rollOverAll()
@@ -71,6 +79,7 @@ final class Store: ObservableObject {
     }
 
     private func save() {
+        guard !demo else { return }
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -120,6 +129,19 @@ final class Store: ObservableObject {
     func adjust(_ s: Subscription, by delta: Double) {
         guard let i = subs.firstIndex(where: { $0.id == s.id }) else { return }
         subs[i].used = max(0, subs[i].used + delta)
+    }
+
+    func isDisconnected(_ src: UsageSource) -> Bool { disconnected.contains(src.rawValue) }
+
+    func setConnected(_ src: UsageSource, _ on: Bool) {
+        if on { disconnected.remove(src.rawValue) } else { disconnected.insert(src.rawValue) }
+        UserDefaults.standard.set(Array(disconnected), forKey: "disconnected")
+        if on {
+            Task { await sync() }
+        } else if let i = subs.firstIndex(where: { $0.source == src }) {
+            subs[i].liveState = .failed
+            subs[i].liveMessage = "연결 해제됨"
+        }
     }
 
     func sub(for source: UsageSource) -> Subscription? { subs.first { $0.source == source } }
@@ -179,7 +201,8 @@ final class Store: ObservableObject {
         isSyncing = true
         defer { isSyncing = false }
 
-        let targets = subs.filter { $0.source != .manual && $0.isActive }.map { ($0.id, $0.source) }
+        let targets = subs.filter { $0.source != .manual && $0.isActive && !disconnected.contains($0.source.rawValue) }
+            .map { ($0.id, $0.source) }
         var results: [UUID: Outcome] = [:]
         await withTaskGroup(of: (UUID, Outcome).self) { group in
             for (id, source) in targets {
@@ -284,26 +307,32 @@ final class Store: ObservableObject {
     func refreshDaily(force: Bool = false) async {
         if !force, let at = dailyComputedAt, Date().timeIntervalSince(at) < 20 * 60 { return }
         dailyComputedAt = Date()
-        let days = 7 * 22
+        let days = 7 * 27
         let (claudeLog, codexLog) = await Task.detached(priority: .utility) {
             (LocalUsageReader.claudeDaily(days: days), LocalUsageReader.codexDaily(days: days))
         }.value
 
         for (key, logs) in [(ProviderKey.claude, claudeLog), (ProviderKey.codex, codexLog)] {
-            var out: [Date: Double] = [:]
-            var peakDays = Set<Date>()
-            let maxTokens = logs.values.max() ?? 0
-            for (day, tokens) in logs where maxTokens > 0 {
-                out[day] = tokens / maxTokens          // 로그 토큰 상대 강도
-            }
+            var real: [Date: Double] = [:]
             for (k, pct) in peaks[key.rawValue] ?? [:] {
                 guard let d = Store.dayKey.date(from: k) else { continue }
-                let day = Calendar.current.startOfDay(for: d)
-                out[day] = min(pct / 100, 1)          // 실제 5시간 최고 사용률이 있으면 우선
-                peakDays.insert(day)
+                real[Calendar.current.startOfDay(for: d)] = pct
             }
+            // 실제 % 를 기록한 날과 로그가 겹치면 '토큰 → %' 비율을 구해 과거 날짜도 % 로 추정
+            var sumPct = 0.0, sumTok = 0.0
+            for (day, pct) in real { if let t = logs[day], t > 0, pct > 0 { sumPct += pct; sumTok += t } }
+            let scale: Double? = sumTok > 0 ? sumPct / sumTok : nil
+            let maxTokens = logs.values.max() ?? 0
+
+            var out: [Date: Double] = [:]
+            for (day, tokens) in logs where tokens > 0 {
+                if let scale { out[day] = min(tokens * scale / 100, 1) }
+                else if maxTokens > 0 { out[day] = tokens / maxTokens }
+            }
+            for (day, pct) in real { out[day] = min(pct / 100, 1) }
             daily[key] = out
-            dailyIsPeak[key] = peakDays
+            dailyIsPeak[key] = Set(real.keys)
+            dailyCalibrated[key] = scale != nil
         }
     }
 

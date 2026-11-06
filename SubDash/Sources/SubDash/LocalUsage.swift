@@ -107,14 +107,32 @@ enum LocalUsageReader {
                              recordedAt: entries.last?.time)
     }
 
+    /// 날짜별 '5시간 블록 최대 토큰' (스크린샷의 Peak 5-hour usage each day 와 같은 개념)
+    static func dailyPeakBlocks(_ entries: [Entry]) -> [Date: Double] {
+        let cal = Calendar.current
+        var out: [Date: Double] = [:]
+        var start: Date?
+        var tokens = 0.0
+        func flush() {
+            guard let s = start else { return }
+            let day = cal.startOfDay(for: s)
+            out[day] = max(out[day] ?? 0, tokens)
+        }
+        for e in entries.sorted(by: { $0.time < $1.time }) {
+            if let s = start, e.time < s.addingTimeInterval(5 * 3600) {
+                tokens += e.tokens
+            } else {
+                flush()
+                start = floorHour(e.time); tokens = e.tokens
+            }
+        }
+        flush()
+        return out
+    }
+
     static func claudeDaily(days: Int, now: Date = Date()) -> [Date: Double] {
         let since = Calendar.current.date(byAdding: .day, value: -days, to: now) ?? now
-        var out: [Date: Double] = [:]
-        let cal = Calendar.current
-        for e in claudeEntries(since: since) {
-            out[cal.startOfDay(for: e.time), default: 0] += e.tokens
-        }
-        return out
+        return dailyPeakBlocks(claudeEntries(since: since))
     }
 
     private static func floorHour(_ d: Date) -> Date {
@@ -162,7 +180,7 @@ enum LocalUsageReader {
             return UsageWindow(id: key, title: title, percent: pct, resetsAt: reset, isWeekly: weekly)
         }
         let windows = [window("primary", "5시간 세션", weekly: false),
-                       window("secondary", "주간 한도", weekly: true)].compactMap { $0 }
+                       window("secondary", "전체", weekly: true)].compactMap { $0 }
         return UsageSnapshot(used: windows.first?.percent ?? 0, limit: 100,
                              resetAt: windows.first?.resetsAt,
                              detail: "마지막 Codex 기록 \(Fmt.relative(latest)) 기준",
@@ -171,8 +189,7 @@ enum LocalUsageReader {
 
     static func codexDaily(days: Int, now: Date = Date()) -> [Date: Double] {
         let since = Calendar.current.date(byAdding: .day, value: -days, to: now) ?? now
-        let cal = Calendar.current
-        var out: [Date: Double] = [:]
+        var entries: [Entry] = []
         for file in files(under: codexRoots, ext: "jsonl", modifiedSince: since) {
             forEachJSONLine(in: file) { obj in
                 guard let payload = obj["payload"] as? [String: Any],
@@ -183,10 +200,10 @@ enum LocalUsageReader {
                 let total = num(last["total_tokens"]) > 0
                     ? num(last["total_tokens"])
                     : num(last["input_tokens"]) + num(last["output_tokens"])
-                out[cal.startOfDay(for: t), default: 0] += total
+                entries.append(Entry(time: t, tokens: total))
             }
         }
-        return out
+        return dailyPeakBlocks(entries)
     }
 
     // MARK: - Gemini CLI
