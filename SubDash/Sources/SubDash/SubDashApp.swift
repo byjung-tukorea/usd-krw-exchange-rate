@@ -24,6 +24,15 @@ struct SubDashApp: App {
             }
         }
 
+        // 웹 로그인 창 (서비스별)
+        WindowGroup("로그인", id: "weblogin", for: UUID.self) { $id in
+            if let id, let sub = store.subs.first(where: { $0.id == id }) {
+                WebLoginView(id: id, start: WebLink.usageURL(for: sub))
+                    .environmentObject(store)
+            }
+        }
+        .defaultSize(width: 900, height: 760)
+
         MenuBarExtra(isInserted: $showMenuBar) {
             MenuBarPanel().environmentObject(store)
         } label: {
@@ -86,8 +95,6 @@ struct MenuBarPanel: View {
                         HStack(spacing: 5) {
                             Circle().fill(st.dotColor).frame(width: 5, height: 5)
                             Text(s.name).font(.system(size: 11, weight: .medium))
-                            Image(systemName: s.acct.symbol).font(.system(size: 8))
-                                .foregroundStyle(Theme.inkFaint)
                             Spacer()
                             if s.primaryWindow != nil || s.limit > 0 {
                                 Text(Fmt.pct(s.ratio * 100))

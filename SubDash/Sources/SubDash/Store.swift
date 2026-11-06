@@ -91,7 +91,8 @@ final class Store: ObservableObject {
     /// 1.x 의 예시 값을 정리 (사용자가 바꾼 값은 건드리지 않음)
     private func migrate() {
         let key = "dataVersion"
-        guard UserDefaults.standard.integer(forKey: key) < 2 else { return }
+        let version = UserDefaults.standard.integer(forKey: key)
+        guard version < 3 else { return }
         var copy = subs
         for i in copy.indices {
             let s = copy[i]
@@ -105,9 +106,17 @@ final class Store: ObservableObject {
                 copy[i].used = 0; copy[i].source = .geminiCLI; copy[i].limit = 1_500
             }
             if s.renewalConfirmed == nil { copy[i].renewalConfirmed = false }
+            // v3: 공개 API 없는 서비스는 웹 로그인 연동으로 전환
+            let n = s.name.lowercased()
+            if (n.contains("lovable") || n.contains("genspark") || n.contains("gemini")),
+               copy[i].source == .manual || copy[i].source == .geminiCLI {
+                copy[i].source = .webPage
+                copy[i].used = 0; copy[i].limit = 0
+                copy[i].liveState = nil; copy[i].liveMessage = nil
+            }
         }
         subs = copy
-        UserDefaults.standard.set(2, forKey: key)
+        UserDefaults.standard.set(3, forKey: key)
     }
 
     var dataFolder: URL { Store.folder }
@@ -150,21 +159,14 @@ final class Store: ObservableObject {
 
     var active: [Subscription] { subs.filter(\.isActive) }
 
-    func activeSubs(_ f: AccountFilter) -> [Subscription] { active.filter { f.matches($0) } }
+    var monthlyTotalKRW: Double { active.reduce(0) { $0 + $1.monthlyCost(usdKrw: usdKrw) } }
 
-    var monthlyTotalKRW: Double { monthlyTotal(.all) }
-
-    func monthlyTotal(_ f: AccountFilter) -> Double {
-        activeSubs(f).reduce(0) { $0 + $1.monthlyCost(usdKrw: usdKrw) }
+    var nextRenewal: Subscription? {
+        active.filter(\.hasRenewal).min { $0.renewalDate < $1.renewalDate }
     }
 
-    func nextRenewal(_ f: AccountFilter) -> Subscription? {
-        activeSubs(f).filter(\.hasRenewal).min { $0.renewalDate < $1.renewalDate }
-    }
-
-    func liveCount(_ f: AccountFilter) -> (live: Int, total: Int) {
-        let list = activeSubs(f)
-        return (list.filter { $0.state == .live }.count, list.count)
+    var liveCount: (live: Int, total: Int) {
+        (active.filter { $0.state == .live }.count, active.count)
     }
 
     // MARK: 동기화
@@ -201,7 +203,8 @@ final class Store: ObservableObject {
         isSyncing = true
         defer { isSyncing = false }
 
-        let targets = subs.filter { $0.source != .manual && $0.isActive && !disconnected.contains($0.source.rawValue) }
+        let targets = subs.filter { $0.source != .manual && $0.source != .webPage && $0.isActive
+                                    && !disconnected.contains($0.source.rawValue) }
             .map { ($0.id, $0.source) }
         var results: [UUID: Outcome] = [:]
         await withTaskGroup(of: (UUID, Outcome).self) { group in
@@ -256,6 +259,56 @@ final class Store: ObservableObject {
         }
         if copy != subs { subs = copy }
         lastSync = now
+        await syncWeb()
+    }
+
+    // MARK: 웹 로그인 서비스
+
+    private let scraper = WebScraper()
+    private var webCheckedAt: [UUID: Date] = [:]
+
+    /// 로그인된 페이지를 화면 밖에서 열어 숫자를 읽는다. 부담을 줄이려 서비스별 15분 간격.
+    func syncWeb(force: Bool = false, only: UUID? = nil) async {
+        let targets = subs.filter { $0.source == .webPage && $0.isActive && (only == nil || $0.id == only) }
+        for t in targets {
+            if !force, let at = webCheckedAt[t.id], Date().timeIntervalSince(at) < 15 * 60 { continue }
+            webCheckedAt[t.id] = Date()
+            let outcome: (WebReading?, String?)
+            do {
+                let page = try await scraper.read(WebLink.usageURL(for: t), id: t.id)
+                outcome = (WebUsageParser.parse(page.text, finalURL: page.finalURL), nil)
+            } catch {
+                outcome = (nil, (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            }
+            guard let i = subs.firstIndex(where: { $0.id == t.id }) else { continue }
+            var s = subs[i]
+            if let err = outcome.1 {
+                s.liveState = .failed
+                s.liveMessage = "페이지를 열지 못함 · \(err)"
+            } else if let r = outcome.0 {
+                if r.loggedOut {
+                    s.liveState = .failed
+                    s.liveMessage = "로그인 필요 — 카드를 눌러 로그인하세요"
+                } else if r.hasUsage || r.renewal != nil {
+                    if let l = r.limit { s.limit = l }
+                    if let rem = r.remaining {
+                        if s.limit > 0 { s.used = max(s.limit - rem, 0) } else { s.limit = rem; s.used = 0 }
+                    }
+                    if let u = r.used { s.used = u }
+                    if s.limitUnit == .percent { s.limitUnit = .credits }
+                    if let d = r.renewal { s.renewalDate = d; s.renewalConfirmed = true }
+                    s.liveState = .live
+                    s.liveAt = Date()
+                    s.syncedDetail = r.hasUsage ? nil : "이 페이지에는 사용 한도가 표시되지 않아요"
+                    let ev = r.evidence.map { "“\(String($0.prefix(60)))”" } ?? "결제일 확인"
+                    s.liveMessage = "웹 로그인 연결됨 · \(ev)"
+                } else {
+                    s.liveState = .failed
+                    s.liveMessage = "페이지에서 사용량을 못 찾음 — 로그인 창에서 크레딧이 보이는 페이지를 지정하세요"
+                }
+            }
+            if s != subs[i] { subs[i] = s }
+        }
     }
 
     private nonisolated static func fetch(_ source: UsageSource) async -> Outcome {
@@ -280,7 +333,7 @@ final class Store: ObservableObject {
                 return .fallback(snap, reason: "Gemini CLI 기록 기준 (웹·앱 사용 미포함)")
             }
             return .failed("Gemini 는 사용량 API 가 없어요 — Gemini CLI 기록도 없음", nil)
-        case .manual:
+        case .manual, .webPage:
             return .failed("", nil)
         }
     }

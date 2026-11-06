@@ -5,10 +5,11 @@ Claude, ChatGPT Codex, Lovable, Genspark, Gemini 구독을 작은 창 하나에�
 
 ## 화면
 
-- **한눈에**: 5개 서비스 카드 (5시간·주간 사용률, 리셋까지 남은 시간, 결제 D-day, 월 합계, 학교/개인 계정 필터)
+- **한눈에**: 5개 서비스 카드 (5시간·주간 사용률, 리셋까지 남은 시간, 결제 D-day, 월 합계)
 - **Claude**: 5시간 세션, 주간(전체·Opus·Sonnet) 한도, 리셋 시각, 연결 상태, 일별 사용 히트맵
 - **Codex**: 5시간·주간 한도, 연결 상태, 일별 사용 히트맵
-- **설정**: 항상 위에, 메뉴 막대 표시, 자동 새로고침, 구글 계정 이메일, 환율
+- **웹 로그인**: 카드를 누르면 서비스 로그인 창 → 로그인 → 크레딧·결제일이 보이는 페이지에서 `이 페이지에서 사용량 읽기`
+- **설정**: 항상 위에, 메뉴 막대 표시, 자동 새로고침, 환율
 - 메뉴 막대에 `C 1%  X 23%` 처럼 Claude/Codex 5시간 사용률 표시
 
 ## 실제 값 연결
@@ -17,8 +18,8 @@ Claude, ChatGPT Codex, Lovable, Genspark, Gemini 구독을 작은 창 하나에�
 | --- | --- | --- |
 | Claude | Claude Code 로그인 토큰(키체인 `Claude Code-credentials`)으로 `api.anthropic.com/api/oauth/usage` 조회 | 성공 시 코발트 |
 | Codex | `~/.codex/auth.json` 로 `chatgpt.com/backend-api/wham/usage` 조회, 실패 시 Codex 로그의 rate_limits | 로그 기준이면 흐린 청회색 |
-| Gemini | 공개 API 없음 → Gemini CLI 기록(`~/.gemini/tmp`)으로 오늘 프롬프트 수 추정 | 흐린 청회색 |
-| Lovable · Genspark | 공개 API 없음 → 직접 입력 | 회색 |
+| Lovable · Genspark | 공개 API 없음 → **앱 안 로그인 창**으로 로그인 후, 크레딧이 보이는 페이지를 15분마다 읽음 | 읽기 성공 시 코발트 |
+| Gemini | 사용 한도 페이지가 없음 → 앱 안 로그인 창으로 Google One 의 플랜·결제일을 읽음 (Gemini CLI 기록 추정도 선택 가능) | 읽기 성공 시 코발트 |
 
 실시간 값을 못 받으면 막대·아이콘 색이 **회색으로 죽고**, 실패 사유와 마지막 성공 시각이 표시됩니다.
 

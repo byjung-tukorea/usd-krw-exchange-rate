@@ -17,6 +17,7 @@ enum Tab: String, CaseIterable, Identifiable {
 
 struct DashboardView: View {
     @EnvironmentObject var store: Store
+    @Environment(\.openWindow) private var openWindow
     @AppStorage("alwaysOnTop") private var alwaysOnTop = false
     @AppStorage("tab") private var tabRaw = Tab.overview.rawValue
 
@@ -74,6 +75,7 @@ struct DashboardView: View {
         switch s.source {
         case .claudeCodeLogs: withAnimation { tab.wrappedValue = .claude }
         case .codexLogs: withAnimation { tab.wrappedValue = .codex }
+        case .webPage: openWindow(id: "weblogin", value: s.id)
         default: editing = s
         }
     }
@@ -118,32 +120,28 @@ struct DashboardView: View {
 struct OverviewTab: View {
     @EnvironmentObject var store: Store
     @AppStorage("showInactive") private var showInactive = true
-    @AppStorage("accountFilter") private var accountFilterRaw = AccountFilter.all.rawValue
     @AppStorage("displayMode") private var displayModeRaw = DisplayMode.used.rawValue
 
     var now: Date
     var onEdit: (Subscription) -> Void
     var onOpen: (Subscription) -> Void
 
-    private var filter: Binding<AccountFilter> {
-        Binding(get: { AccountFilter(rawValue: accountFilterRaw) ?? .all }, set: { accountFilterRaw = $0.rawValue })
-    }
     private var mode: Binding<DisplayMode> {
         Binding(get: { DisplayMode(rawValue: displayModeRaw) ?? .used }, set: { displayModeRaw = $0.rawValue })
     }
 
     private var visible: [Subscription] {
-        store.subs.filter { (showInactive || $0.isActive) && filter.wrappedValue.matches($0) }
+        store.subs.filter { showInactive || $0.isActive }
     }
 
     var body: some View {
         VStack(spacing: 14) {
-            SummaryPanel(filter: filter.wrappedValue)
+            SummaryPanel()
 
-            HStack(spacing: 10) {
-                NeuSegmented(options: AccountFilter.allCases, selection: filter) { $0.label }
+            HStack {
+                Spacer()
                 NeuSegmented(options: DisplayMode.allCases, selection: mode) { $0.label }
-                    .frame(width: 128)
+                    .frame(width: 140)
             }
 
             LazyVStack(spacing: 14) {
@@ -177,16 +175,15 @@ struct OverviewTab: View {
 
 struct SummaryPanel: View {
     @EnvironmentObject var store: Store
-    var filter: AccountFilter = .all
 
     var body: some View {
-        let lc = store.liveCount(filter)
+        let lc = store.liveCount
         HStack(spacing: 0) {
-            stat(title: filter == .all ? "월 합계" : "월 합계 · \(filter.label)",
-                 value: Fmt.won(store.monthlyTotal(filter)),
-                 sub: "\(store.activeSubs(filter).count)개 구독", accent: false)
+            stat(title: "월 합계",
+                 value: Fmt.won(store.monthlyTotalKRW),
+                 sub: "\(store.active.count)개 구독", accent: false)
             divider
-            if let n = store.nextRenewal(filter) {
+            if let n = store.nextRenewal {
                 stat(title: "다음 결제", value: Fmt.dday(n.daysUntilRenewal), sub: n.name,
                      accent: n.daysUntilRenewal <= 3)
             } else {
@@ -224,6 +221,7 @@ struct SummaryPanel: View {
 
 struct ServiceCard: View {
     @EnvironmentObject var store: Store
+    @Environment(\.openWindow) private var openWindow
     var sub: Subscription
     var mode: DisplayMode
     var now: Date
@@ -253,13 +251,10 @@ struct ServiceCard: View {
                             .lineLimit(1)
                         stateDot(st)
                     }
-                    HStack(spacing: 5) {
-                        accountChip
-                        Text("\(sub.detectedPlan ?? sub.plan) · \(Fmt.price(sub))/월")
-                            .font(.system(size: 10))
-                            .foregroundStyle(Theme.inkSoft)
-                            .lineLimit(1)
-                    }
+                    Text("\(sub.detectedPlan ?? sub.plan) · \(Fmt.price(sub))/월")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.inkSoft)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 ddayBadge
@@ -277,14 +272,11 @@ struct ServiceCard: View {
         .onTapGesture(perform: onOpen)
         .contextMenu {
             if sub.source.isLive { Button("자세히 보기", action: onOpen) }
-            Button("편집…", action: onEdit)
-            Menu("로그인 계정") {
-                ForEach(Account.allCases) { a in
-                    Button((sub.acct == a ? "✓ " : "") + a.label + (a.email.isEmpty ? "" : " (\(a.email))")) {
-                        var s = sub; s.acct = a; store.upsert(s)
-                    }
-                }
+            if sub.source == .webPage {
+                Button("로그인 / 사용량 페이지 열기…") { openWindow(id: "weblogin", value: sub.id) }
+                Button("지금 다시 읽기") { Task { await store.syncWeb(force: true, only: sub.id) } }
             }
+            Button("편집…", action: onEdit)
             if sub.source == .manual {
                 Divider()
                 Button("사용량 +1") { store.adjust(sub, by: 1) }
@@ -303,18 +295,6 @@ struct ServiceCard: View {
             Text(st.label).font(.system(size: 8.5, weight: .semibold))
                 .foregroundStyle(st == .live ? Theme.accent : Theme.inkFaint)
         }
-    }
-
-    private var accountChip: some View {
-        let a = sub.acct
-        return HStack(spacing: 2) {
-            Image(systemName: a.symbol).font(.system(size: 7, weight: .bold))
-            Text(a.label).font(.system(size: 9, weight: .semibold))
-        }
-        .foregroundStyle(Theme.inkSoft)
-        .padding(.horizontal, 5).padding(.vertical, 1.5)
-        .background(InsetBackground(shape: Capsule(), depth: 1.5))
-        .help(a.email.isEmpty ? "\(a.label) 구글 계정" : a.email)
     }
 
     private var ddayBadge: some View {
@@ -373,7 +353,28 @@ struct ServiceCard: View {
         }
     }
 
+    @ViewBuilder
     private func manualRow(_ st: LiveState) -> some View {
+        if sub.source == .webPage && sub.limit <= 0 {
+            HStack(spacing: 6) {
+                Image(systemName: st == .live ? "checkmark.seal" : "person.crop.circle.badge.questionmark")
+                    .font(.system(size: 11))
+                    .foregroundStyle(st == .live ? Theme.accent : Theme.inkFaint)
+                Text(st == .live
+                     ? (sub.syncedDetail ?? "연결됨")
+                     : "로그인하면 크레딧·결제일을 읽어옵니다")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(st == .live ? Theme.ink : Theme.inkSoft)
+                Spacer()
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .inset(radius: 9, depth: 2)
+        } else {
+            meterRow(st)
+        }
+    }
+
+    private func meterRow(_ st: LiveState) -> some View {
         let hasLimit = sub.limit > 0
         let shown = mode == .used ? sub.used : sub.remaining
         let ratio = mode == .used ? sub.ratio : (hasLimit ? 1 - sub.ratio : 0)
@@ -401,7 +402,10 @@ struct ServiceCard: View {
     private func footnote(_ st: LiveState) -> some View {
         switch st {
         case .live:
-            EmptyView()
+            if sub.source == .webPage {
+                note((sub.liveMessage ?? "웹 로그인 연결됨")
+                     + (sub.liveAt.map { " · \(Fmt.relative($0, now: now))" } ?? ""), icon: "globe")
+            }
         case .fallback:
             note(sub.liveMessage ?? "로컬 기록 기준", icon: "internaldrive")
         case .failed:

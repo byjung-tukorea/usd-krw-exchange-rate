@@ -47,6 +47,7 @@ enum ResetCycle: String, Codable, CaseIterable, Identifiable {
 enum UsageSource: String, Codable, CaseIterable, Identifiable {
     case claudeCodeLogs   // Claude 계정 (실시간 API → 실패 시 로그)
     case codexLogs        // ChatGPT/Codex 계정 (실시간 API → 실패 시 로그)
+    case webPage          // 앱 안 로그인 창으로 로그인 → 사용량 페이지를 읽음
     case geminiCLI        // Gemini CLI 로컬 기록 (추정)
     case manual
     var id: String { rawValue }
@@ -55,6 +56,7 @@ enum UsageSource: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .claudeCodeLogs: return "Claude 계정 (실시간)"
         case .codexLogs: return "ChatGPT·Codex 계정 (실시간)"
+        case .webPage: return "웹 로그인 (페이지 읽기)"
         case .geminiCLI: return "Gemini CLI 기록 (추정)"
         case .manual: return "직접 입력"
         }
@@ -67,36 +69,6 @@ enum Currency: String, Codable, CaseIterable, Identifiable {
     case usd = "USD", krw = "KRW"
     var id: String { rawValue }
     var symbol: String { self == .usd ? "$" : "₩" }
-}
-
-/// 구글 SSO 로그인 계정 (서비스마다 다름)
-enum Account: String, Codable, CaseIterable, Identifiable {
-    case school, personal
-    var id: String { rawValue }
-    var label: String { self == .school ? "학교" : "개인" }
-    var symbol: String { self == .school ? "graduationcap" : "person" }
-    var email: String {
-        UserDefaults.standard.string(forKey: self == .school ? "schoolEmail" : "personalEmail") ?? ""
-    }
-}
-
-enum AccountFilter: String, CaseIterable, Identifiable {
-    case all, school, personal
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .all: return "전체"
-        case .school: return "학교"
-        case .personal: return "개인"
-        }
-    }
-    func matches(_ s: Subscription) -> Bool {
-        switch self {
-        case .all: return true
-        case .school: return s.acct == .school
-        case .personal: return s.acct == .personal
-        }
-    }
 }
 
 /// 서비스가 알려 준 사용 창 하나 (예: 5시간, 주간 전체, 주간 Opus)
@@ -129,18 +101,13 @@ struct Subscription: Identifiable, Codable, Equatable {
     // 이하 선택 값 (예전 데이터 호환)
     var syncedResetAt: Date?
     var syncedDetail: String?
-    var account: Account?
     var windows: [UsageWindow]?        // 실시간/로그로 받은 사용 창
     var liveState: LiveState?
     var liveMessage: String?           // "Claude 계정 연결됨", 실패 사유 등
     var liveAt: Date?                  // 마지막으로 값을 받은 시각
     var detectedPlan: String?          // 서비스가 알려 준 플랜
     var renewalConfirmed: Bool?        // 사용자가 결제일을 직접 확인했는지
-
-    var acct: Account {
-        get { account ?? .personal }
-        set { account = newValue }
-    }
+    var webURL: String?                // 웹 로그인: 사용량이 보이는 페이지 주소
 
     var state: LiveState { source == .manual ? .manual : (liveState ?? .failed) }
 
@@ -214,17 +181,17 @@ extension Subscription {
                          resetCycle: .fiveHours, lastReset: now, source: .codexLogs, renewalConfirmed: false),
             Subscription(name: "Lovable", plan: "Pro", symbol: "heart",
                          price: 25, currency: .usd, renewalDate: soon,
-                         limitUnit: .credits, used: 0, limit: 100,
-                         resetCycle: .monthly, lastReset: now, renewalConfirmed: false),
+                         limitUnit: .credits, used: 0, limit: 0,
+                         resetCycle: .monthly, lastReset: now, source: .webPage, renewalConfirmed: false),
             Subscription(name: "Genspark", plan: "Plus", symbol: "bolt",
                          price: 24.99, currency: .usd, renewalDate: soon,
-                         limitUnit: .credits, used: 0, limit: 10_000,
-                         resetCycle: .monthly, lastReset: now, renewalConfirmed: false),
+                         limitUnit: .credits, used: 0, limit: 0,
+                         resetCycle: .monthly, lastReset: now, source: .webPage, renewalConfirmed: false),
             Subscription(name: "Gemini", plan: "Google AI Pro", symbol: "diamond",
                          price: 29_000, currency: .krw, renewalDate: soon,
-                         limitUnit: .requests, used: 0, limit: 1_500,
-                         resetCycle: .daily, lastReset: Calendar.current.startOfDay(for: now),
-                         source: .geminiCLI, renewalConfirmed: false),
+                         limitUnit: .requests, used: 0, limit: 0,
+                         resetCycle: .monthly, lastReset: now,
+                         source: .webPage, renewalConfirmed: false),
         ]
     }
 }

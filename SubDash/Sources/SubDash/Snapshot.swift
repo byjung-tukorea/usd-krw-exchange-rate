@@ -91,13 +91,18 @@ enum Snapshot {
         list[1].liveState = .live
         list[1].liveAt = now.addingTimeInterval(-60)
         list[1].detectedPlan = "Plus"
-        list[1].account = .school
 
-        list[2].used = 46; list[2].renewalConfirmed = true
+        list[2].limit = 100; list[2].used = 54; list[2].limitUnit = .credits
+        list[2].liveState = .live; list[2].liveAt = now.addingTimeInterval(-300)
+        list[2].liveMessage = "웹 로그인 연결됨 · “46 of 100 credits remaining”"
+        list[2].renewalConfirmed = true
         list[2].renewalDate = Calendar.current.date(byAdding: .day, value: 2, to: now)!
-        list[3].used = 3_200
-        list[4].used = 18; list[4].liveState = .fallback
-        list[4].liveMessage = "Gemini CLI 기록 기준 (웹·앱 사용 미포함)"; list[4].account = .school
+        list[3].liveState = .failed; list[3].liveMessage = "로그인 필요 — 카드를 눌러 로그인하세요"
+        list[4].liveState = .live; list[4].liveAt = now.addingTimeInterval(-600)
+        list[4].syncedDetail = "이 페이지에는 사용 한도가 표시되지 않아요"
+        list[4].liveMessage = "웹 로그인 연결됨 · 결제일 확인"
+        list[4].renewalConfirmed = true
+        list[4].renewalDate = Calendar.current.date(byAdding: .day, value: 19, to: now)!
         s.subs = list
         s.lastSync = now
 

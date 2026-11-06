@@ -2,6 +2,7 @@ import SwiftUI
 
 struct EditView: View {
     @EnvironmentObject var store: Store
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
 
     let original: Subscription
@@ -35,14 +36,6 @@ struct EditView: View {
                     section("기본") {
                         row("서비스") { NeuField(title: "예: Claude", text: $s.name) }
                         row("플랜") { NeuField(title: "예: Max 5x", text: $s.plan) }
-                        row("구글 계정") {
-                            NeuSegmented(options: Account.allCases, selection: $s.acct) { $0.label }
-                        }
-                        if !s.acct.email.isEmpty {
-                            Text(s.acct.email)
-                                .font(.system(size: 10)).foregroundStyle(Theme.inkFaint)
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                        }
                         row("아이콘") { symbolPicker }
                     }
 
@@ -76,7 +69,26 @@ struct EditView: View {
                             .labelsHidden()
                             .frame(maxWidth: .infinity, alignment: .trailing)
                         }
-                        if s.source.isLive {
+                        if s.source == .webPage {
+                            Text("앱 안 로그인 창에서 로그인한 뒤, 크레딧·결제일이 보이는 페이지를 지정하면 15분마다 읽어옵니다. 비밀번호는 앱이 보거나 저장하지 않아요.")
+                                .font(.system(size: 10)).foregroundStyle(Theme.inkFaint)
+                                .fixedSize(horizontal: false, vertical: true)
+                            row("페이지") {
+                                NeuField(title: WebLink.defaultHome(for: s.name).absoluteString,
+                                         text: Binding(get: { s.webURL ?? "" },
+                                                       set: { s.webURL = $0.isEmpty ? nil : $0 }))
+                            }
+                            Button {
+                                store.upsert(s)
+                                openWindow(id: "weblogin", value: s.id)
+                            } label: {
+                                Label("로그인 창 열기", systemImage: "person.badge.key")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .padding(.horizontal, 12).padding(.vertical, 7)
+                            }
+                            .buttonStyle(NeuButtonStyle(radius: 8, prominent: true))
+                            .disabled(s.name.trimmingCharacters(in: .whitespaces).isEmpty)
+                        } else if s.source.isLive {
                             Text("서비스 계정에서 5시간·주간 사용률을 실시간으로 받아옵니다.")
                                 .font(.system(size: 10)).foregroundStyle(Theme.inkFaint)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -144,7 +156,8 @@ struct EditView: View {
                     if s.source != original.source { s.liveState = nil; s.windows = nil; s.liveMessage = nil }
                     store.upsert(s)
                     dismiss()
-                    if s.source != .manual { Task { await store.sync() } }
+                    if s.source == .webPage { Task { await store.syncWeb(force: true, only: s.id) } }
+                    else if s.source != .manual { Task { await store.sync() } }
                 } label: {
                     Text("저장").font(.system(size: 11, weight: .bold))
                         .padding(.horizontal, 16).padding(.vertical, 7)
@@ -208,8 +221,6 @@ struct SettingsTab: View {
     @AppStorage("autoRate") private var autoRate = true
     @AppStorage("alwaysOnTop") private var alwaysOnTop = false
     @AppStorage("showMenuBar") private var showMenuBar = true
-    @AppStorage("schoolEmail") private var schoolEmail = ""
-    @AppStorage("personalEmail") private var personalEmail = ""
 
     private var rate: Binding<Double> {
         Binding(get: { store.usdKrw }, set: { store.usdKrw = $0 })
@@ -225,12 +236,6 @@ struct SettingsTab: View {
                 Toggle(isOn: $autoRate) { t("환율 자동 갱신") }
             }
             .toggleStyle(NeuToggleStyle())
-
-            card {
-                SectionLabel(text: "구글 SSO 계정")
-                emailRow(.school, $schoolEmail)
-                emailRow(.personal, $personalEmail)
-            }
 
             card {
                 SectionLabel(text: "환율")
@@ -252,8 +257,7 @@ struct SettingsTab: View {
                 SectionLabel(text: "연결 방식")
                 info("Claude", "Claude Code 로그인 토큰(키체인)으로 api.anthropic.com 에서 조회")
                 info("Codex", "~/.codex/auth.json 으로 chatgpt.com 에서 조회 · 실패 시 Codex 로그")
-                info("Gemini", "공개 API 없음 · Gemini CLI 기록(~/.gemini)으로 추정")
-                info("Lovable·Genspark", "공개 API 없음 · 직접 입력")
+                info("Lovable·Genspark·Gemini", "공개 API 없음 → 앱 안 로그인 창으로 로그인, 사용량 페이지를 15분마다 읽음 (Gemini 는 Google One 의 플랜·결제일)")
                 Text("토큰은 이 Mac 에서 해당 서비스로만 전송되며 앱이 따로 저장하지 않습니다.")
                     .font(.system(size: 9)).foregroundStyle(Theme.inkFaint)
             }
@@ -280,15 +284,6 @@ struct SettingsTab: View {
         VStack(alignment: .leading, spacing: 11) { content() }
             .padding(14)
             .raised(radius: 16, depth: 5)
-    }
-
-    private func emailRow(_ a: Account, _ text: Binding<String>) -> some View {
-        HStack {
-            Label(a.label, systemImage: a.symbol)
-                .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.ink)
-                .frame(width: 56, alignment: .leading)
-            NeuField(title: "\(a.label) 지메일", text: text)
-        }
     }
 
     private func info(_ name: String, _ desc: String) -> some View {
